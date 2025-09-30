@@ -14,7 +14,7 @@ st.set_page_config(page_title="Pro'VerBs™ LAW'8",
 # Custom CSS for mobile-friendly design
 st.markdown("""
 @ -61,7 +59,9 @@ st.markdown("""
-        }
+           )
     }
 </style>
 """, unsafe_allow_html=True)
