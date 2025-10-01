@@ -9,13 +9,22 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 
-from .model import ModelWrapper
+# If this file is run standalone, use absolute import
+try:
+    from .model import ModelWrapper
+except ImportError:
+    from model import ModelWrapper
 
 app = FastAPI(title="Proverbs Generator API")
 
 # Config
 model_name = os.environ.get("MODEL_NAME", "gpt2")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "info").lower()
+
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 
 # lazy model
 _model_lock = threading.RLock()
@@ -57,7 +66,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         if _shared_executor is not None:
-            _shared_executor.shutdown(wait=False)
+            _shared_executor.shutdown(wait=True)
 
 
 app.router.lifespan_context = lifespan
@@ -74,25 +83,24 @@ app.add_middleware(
 
 @app.middleware("http")
 async def _request_logging_middleware(request: Request, call_next):
+    logger = logging.getLogger("uvicorn.access")
     if LOG_LEVEL in ("debug", "info"):
-        logger = logging.getLogger("uvicorn.access")
         logger.info(f"{request.method} {request.url}")
     response = await call_next(request)
     if LOG_LEVEL == "debug":
-        logger = logging.getLogger("uvicorn.access")
         logger.info(f"{request.method} {request.url} -> {response.status_code}")
     return response
 
 
 @app.post('/admin/load_real')
-async def admin_load_real(request: Request, model_name: Optional[str] = None):
+async def admin_load_real(request: Request, new_model_name: Optional[str] = None):
     _check_admin_auth(request)
     try:
         m = get_model()
     except Exception:
         raise HTTPException(status_code=500, detail='model container unavailable')
 
-    _run_in_background(m.load_real_model, model_name)
+    _run_in_background(m.load_real_model, new_model_name)
     return {"status": "accepted", "action": "loading_real_model"}
 
 
@@ -127,7 +135,7 @@ async def ready():
         m = get_model()
     except Exception:
         return {"ready": False}
-    ready_flag = getattr(m, "_ready", True)
+    ready_flag = getattr(m, "_ready", False)
     return {"ready": bool(ready_flag)}
 
 
@@ -151,7 +159,7 @@ async def generate(req: GenerateRequest):
         raise HTTPException(status_code=400, detail="prompt is required")
     try:
         model = get_model()
-        if not getattr(model, "_ready", True):
+        if not getattr(model, "_ready", False):
             raise HTTPException(status_code=503, detail="model not ready")
 
         timeout_seconds = int(os.environ.get("MODEL_GEN_TIMEOUT", "30"))
@@ -182,4 +190,3 @@ async def generate(req: GenerateRequest):
     except Exception as e:
         logging.exception("Generation error")
         raise HTTPException(status_code=500, detail=str(e))
- 
